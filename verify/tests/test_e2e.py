@@ -166,3 +166,149 @@ def test_allowed_verdict_has_no_drain_entry(page: Page, base_url: str):
     expect(page.get_by_test_id("verdict")).to_have_text("允许补加")
     expect(page.get_by_test_id("drain-entry")).to_have_count(0)
     expect(page.get_by_test_id("drain-panel")).to_have_count(0)
+
+
+# ---------- 稳健刻度方案主线 ----------
+
+
+def submit_robust(page: Page) -> None:
+    page.get_by_test_id("robust-entry").click()
+
+
+def fill_robust(page: Page, q: str, u: str, e: str) -> None:
+    page.locator("#field-Q").fill(q)
+    page.locator("#field-U").fill(u)
+    page.locator("#field-E").fill(e)
+
+
+def test_forbidden_verdict_has_no_robust_entry(page: Page, base_url: str):
+    page.goto(base_url)
+    fill_form(page, FORBIDDEN_VALUES)
+    submit(page)
+
+    expect(page.get_by_test_id("verdict")).to_have_text("禁止补加")
+    expect(page.get_by_test_id("robust-entry")).to_have_count(0)
+    expect(page.get_by_test_id("robust-panel")).to_have_count(0)
+
+
+def test_robust_plan_mainline_under_allowed_verdict(page: Page, base_url: str):
+    # V=500,C=5,T=8,S=30,K=600,Q=10,U=0：n=7，剂量 70，终态 570，糖度单点 8.0702
+    page.goto(base_url)
+    fill_form(page, ALLOW_VALUES)
+    submit(page)
+    expect(page.get_by_test_id("verdict")).to_have_text("允许补加")
+
+    fill_robust(page, "10", "0", "0.5")
+    submit_robust(page)
+
+    expect(page.get_by_test_id("robust-status")).to_have_text("稳健刻度")
+    expect(page.get_by_test_id("robust-dose")).to_have_text("70")
+    expect(page.get_by_test_id("robust-final-volume")).to_have_text("570")
+    expect(page.get_by_test_id("robust-sugar-range")).to_have_text("8.0702 ~ 8.0702")
+    expect(page.get_by_test_id("robust-worst")).to_have_text("0.0702")
+    expect(page.get_by_test_id("robust-gap")).to_have_count(0)
+    # 方案挂在允许结论之下，原判定保持不变
+    expect(page.get_by_test_id("verdict")).to_have_text("允许补加")
+    # 允许结论下不出现腾容入口
+    expect(page.get_by_test_id("drain-panel")).to_have_count(0)
+
+
+def test_robust_sugar_interval_with_uncertainty(page: Page, base_url: str):
+    # U=2：终态糖度为真实区间，两端点不再相同
+    page.goto(base_url)
+    fill_form(page, ALLOW_VALUES)
+    submit(page)
+
+    fill_robust(page, "10", "2", "5")
+    submit_robust(page)
+
+    expect(page.get_by_test_id("robust-status")).to_have_text("稳健刻度")
+    range_text = page.get_by_test_id("robust-sugar-range").inner_text()
+    low, high = [part.strip() for part in range_text.split("~")]
+    assert low != high
+    expect(page.get_by_test_id("robust-worst")).not_to_have_text("")
+
+
+def test_no_robust_shows_tolerance_gap(page: Page, base_url: str):
+    # K=569 时判定仍为允许补加（终态 568.18≤569）；Q=10,U=2,E=0 时
+    # n_max=6，最优 n=6 最坏偏差 0.5357…>0，无稳健刻度，缺口 0.5357
+    page.goto(base_url)
+    fill_form(page, {**ALLOW_VALUES, "K": "569"})
+    submit(page)
+    expect(page.get_by_test_id("verdict")).to_have_text("允许补加")
+
+    fill_robust(page, "10", "2", "0")
+    submit_robust(page)
+
+    expect(page.get_by_test_id("robust-status")).to_have_text("无稳健刻度")
+    expect(page.get_by_test_id("robust-gap")).to_have_text("0.5357")
+    # 仍给出最优刻度剂量与最坏偏差
+    expect(page.get_by_test_id("robust-dose")).to_have_text("60")
+    expect(page.get_by_test_id("robust-worst")).to_have_text("0.5357")
+
+
+def test_no_capacity_shows_business_message(page: Page, base_url: str):
+    # K=569 时判定仍为允许补加（终态 568.18≤569），但剩余 69 mL 放不下 Q=70 一个刻度
+    page.goto(base_url)
+    fill_form(page, {**ALLOW_VALUES, "K": "569"})
+    submit(page)
+    expect(page.get_by_test_id("verdict")).to_have_text("允许补加")
+
+    fill_robust(page, "70", "1", "0.1")
+    submit_robust(page)
+
+    expect(page.get_by_test_id("robust-status")).to_have_text("容量放不下一个刻度")
+    expect(page.get_by_test_id("robust-dose")).to_have_count(0)
+
+
+def test_invalid_q_clears_old_plan_but_keeps_allowed_verdict(page: Page, base_url: str):
+    page.goto(base_url)
+    fill_form(page, ALLOW_VALUES)
+    submit(page)
+    expect(page.get_by_test_id("verdict")).to_have_text("允许补加")
+
+    fill_robust(page, "10", "0", "0.5")
+    submit_robust(page)
+    expect(page.get_by_test_id("robust-status")).to_have_text("稳健刻度")
+
+    # 再填非法 Q：定位字段、清除旧方案，但保留原允许结论
+    page.locator("#field-Q").fill("0")
+    submit_robust(page)
+
+    expect(page.get_by_test_id("error-Q")).to_have_text("单刻度量 Q 必须大于 0")
+    expect(page.get_by_test_id("robust-result")).to_have_count(0)
+    expect(page.get_by_test_id("verdict")).to_have_text("允许补加")
+
+
+def test_rejudge_clears_robust_plan(page: Page, base_url: str):
+    page.goto(base_url)
+    fill_form(page, ALLOW_VALUES)
+    submit(page)
+    fill_robust(page, "10", "0", "0.5")
+    submit_robust(page)
+    expect(page.get_by_test_id("robust-status")).to_have_text("稳健刻度")
+
+    # 重新判定为禁止补加：稳健刻度方案与其入口一并消失，腾容入口出现
+    page.locator("#field-K").fill("550")
+    submit(page)
+
+    expect(page.get_by_test_id("verdict")).to_have_text("禁止补加")
+    expect(page.get_by_test_id("robust-panel")).to_have_count(0)
+    expect(page.get_by_test_id("drain-panel")).to_have_count(1)
+
+
+def test_invalid_rejudge_clears_robust_plan(page: Page, base_url: str):
+    page.goto(base_url)
+    fill_form(page, ALLOW_VALUES)
+    submit(page)
+    fill_robust(page, "10", "0", "0.5")
+    submit_robust(page)
+    expect(page.get_by_test_id("robust-status")).to_have_text("稳健刻度")
+
+    # 非法输入重新判定：整单拒绝并清除结论与方案
+    page.locator("#field-T").fill("3")
+    submit(page)
+
+    expect(page.get_by_test_id("result")).to_have_count(0)
+    expect(page.get_by_test_id("robust-panel")).to_have_count(0)
+    expect(page.get_by_test_id("error-T")).to_have_text("目标糖度 T 必须大于当前糖度 C")

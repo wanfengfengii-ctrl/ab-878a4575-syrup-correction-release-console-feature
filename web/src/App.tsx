@@ -2,10 +2,17 @@ import { useReducer, useState } from 'react';
 import type { FormEvent } from 'react';
 import { DrainPlanPanel } from './components/DrainPlanPanel';
 import { ResultPanel } from './components/ResultPanel';
-import { FIELD_KEYS, judgeDose, JudgeRequestError, requestDrainPlan } from './lib/api';
-import type { FieldKey } from './lib/api';
+import { RobustPlanPanel } from './components/RobustPlanPanel';
+import {
+  FIELD_KEYS,
+  judgeDose,
+  JudgeRequestError,
+  requestDrainPlan,
+  requestRobustPlan,
+} from './lib/api';
+import type { FieldKey, RobustFieldKey } from './lib/api';
 import { consoleReducer, initialState } from './lib/state';
-import { mapFieldErrors, splitDrainErrors } from './lib/view';
+import { mapFieldErrors, splitDrainErrors, splitRobustErrors } from './lib/view';
 
 const FIELD_META: Record<FieldKey, { label: string; unit: string }> = {
   V: { label: '当前体积 V', unit: 'mL' },
@@ -14,6 +21,8 @@ const FIELD_META: Record<FieldKey, { label: string; unit: string }> = {
   S: { label: '糖浆糖度 S', unit: '%' },
   K: { label: '罐体容量 K', unit: 'mL' },
 };
+
+const EMPTY_ROBUST: Record<RobustFieldKey, string> = { Q: '', U: '', E: '' };
 
 export default function App() {
   const [values, setValues] = useState<Record<FieldKey, string>>({
@@ -24,12 +33,14 @@ export default function App() {
     K: '',
   });
   const [drainLimit, setDrainLimit] = useState('');
+  const [robustValues, setRobustValues] = useState<Record<RobustFieldKey, string>>(EMPTY_ROBUST);
   const [state, dispatch] = useReducer(consoleReducer, initialState);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    // 主判定重新发起：旧腾容方案与 D 一并作废
+    // 主判定重新发起：旧方案与其专属输入一并作废
     setDrainLimit('');
+    setRobustValues(EMPTY_ROBUST);
     dispatch({ type: 'submit/start' });
     try {
       const result = await judgeDose(values);
@@ -66,6 +77,34 @@ export default function App() {
       } else {
         dispatch({
           type: 'drain/failed',
+          message: error instanceof Error ? error.message : '未知错误',
+        });
+      }
+    }
+  }
+
+  function onRobustValueChange(field: RobustFieldKey, value: string) {
+    setRobustValues((prev) => ({ ...prev, [field]: value }));
+  }
+
+  async function onRobustSubmit() {
+    const result = state.result;
+    if (!result || result.verdict !== 'ALLOWED') return;
+    dispatch({ type: 'robust/start' });
+    try {
+      // 复用允许补加结论的五项输入，只新增单刻度量 Q、糖度波动 U、终态容差 E
+      const plan = await requestRobustPlan(result.inputs, robustValues);
+      dispatch({ type: 'robust/success', plan });
+    } catch (error) {
+      if (error instanceof JudgeRequestError) {
+        const { fieldErrors, robustFieldErrors, globalMessages } = splitRobustErrors(
+          error.fieldErrors,
+        );
+        const message = [error.message, ...globalMessages].join('；');
+        dispatch({ type: 'robust/rejected', fieldErrors, robustFieldErrors, message });
+      } else {
+        dispatch({
+          type: 'robust/failed',
           message: error instanceof Error ? error.message : '未知错误',
         });
       }
@@ -115,7 +154,20 @@ export default function App() {
         </div>
       )}
       {state.result && (
-        <ResultPanel result={state.result}>
+        <ResultPanel
+          result={state.result}
+          allowedSlot={
+            <RobustPlanPanel
+              plan={state.robustPlan}
+              values={robustValues}
+              onValueChange={onRobustValueChange}
+              fieldErrors={state.robustFieldErrors}
+              globalError={state.robustGlobalError}
+              submitting={state.robustSubmitting}
+              onSubmit={onRobustSubmit}
+            />
+          }
+        >
           <DrainPlanPanel
             plan={state.drainPlan}
             value={drainLimit}

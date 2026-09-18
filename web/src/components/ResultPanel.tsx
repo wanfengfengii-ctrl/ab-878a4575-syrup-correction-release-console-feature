@@ -6,10 +6,12 @@ interface ResultPanelProps {
   result: JudgeResponse;
   /** 禁止补加时承载的内容（腾容方案入口与面板） */
   children?: ReactNode;
+  /** 允许补加时承载的内容（稳健刻度方案入口与面板） */
+  allowedSlot?: ReactNode;
 }
 
 /** 判定结论面板：集中展示公式代入、唯一补加量、终态体积与容量结论。 */
-export function ResultPanel({ result, children }: ResultPanelProps) {
+export function ResultPanel({ result, children, allowedSlot }: ResultPanelProps) {
   const view = buildResultView(result);
   const allowed = view.verdict === 'ALLOWED';
   return (
@@ -32,7 +34,7 @@ export function ResultPanel({ result, children }: ResultPanelProps) {
           </div>
         ))}
       </dl>
-      {!allowed && children}
+      {allowed ? allowedSlot : children}
     </section>
   );
 }

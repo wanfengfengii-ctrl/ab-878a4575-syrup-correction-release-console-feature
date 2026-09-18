@@ -6,12 +6,24 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from .schemas import ALL_FIELD_NAMES, DrainPlanRequest, DrainPlanResponse, JudgeRequest, JudgeResponse
-from .service import JudgeRejected, drain_plan, judge
+from .schemas import (
+    ALL_FIELD_NAMES,
+    ROBUST_ALL_FIELD_NAMES,
+    DrainPlanRequest,
+    DrainPlanResponse,
+    JudgeRequest,
+    JudgeResponse,
+    RobustPlanRequest,
+    RobustPlanResponse,
+)
+from .service import JudgeRejected, drain_plan, judge, robust_plan
 
 app = FastAPI(title="单罐补加判定台", version="1.0.0")
 
 REJECT_DETAIL = "输入校验失败，已整单拒绝"
+
+# 所有接口中可定位到字段的错误（判定五项 + D + Q/U/E）
+LOCATABLE_FIELDS = ALL_FIELD_NAMES + tuple(f for f in ROBUST_ALL_FIELD_NAMES if f not in ALL_FIELD_NAMES)
 
 
 def _error_body(errors: list[dict]) -> dict:
@@ -32,7 +44,7 @@ async def request_validation_handler(request: Request, exc: RequestValidationErr
     errors: list[dict] = []
     for err in exc.errors():
         loc = [str(part) for part in err.get("loc", [])]
-        field = next((p for p in reversed(loc) if p in ALL_FIELD_NAMES), None)
+        field = next((p for p in reversed(loc) if p in LOCATABLE_FIELDS), None)
         err_type = err.get("type", "")
         msg = str(err.get("msg", "输入无效"))
         if err_type == "missing":
@@ -66,3 +78,8 @@ def judge_endpoint(payload: JudgeRequest) -> dict:
 @app.post("/api/drain-plan", response_model=DrainPlanResponse)
 def drain_plan_endpoint(payload: DrainPlanRequest) -> dict:
     return drain_plan(payload)
+
+
+@app.post("/api/robust-plan", response_model=RobustPlanResponse)
+def robust_plan_endpoint(payload: RobustPlanRequest) -> dict:
+    return robust_plan(payload)

@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import type { DrainPlanResponse, JudgeResponse } from '../src/lib/api';
-import { buildDrainPlanView, buildResultView, mapFieldErrors, splitDrainErrors } from '../src/lib/view';
+import type {
+  DrainPlanResponse,
+  JudgeResponse,
+  RobustPlanResponse,
+} from '../src/lib/api';
+import {
+  buildDrainPlanView,
+  buildResultView,
+  buildRobustPlanView,
+  mapFieldErrors,
+  splitDrainErrors,
+  splitRobustErrors,
+} from '../src/lib/view';
 
 // 以下响应取自真实 API 计算结果（decimal，50 位有效数字）
 const allowedResponse: JudgeResponse = {
@@ -149,5 +160,106 @@ describe('splitDrainErrors 腾容非法输入', () => {
       { field: 'V', message: '当前体积 V 必须大于 0' },
     ]);
     expect(drainFieldError).toBeNull();
+  });
+});
+
+// 以下响应取自真实 API 计算结果（decimal，50 位有效数字）：
+// V=500 C=5 T=8 S=30 K=600 Q=10 U=0 E=0.5 时 n=7，剂量 70，终态 570
+const robustPlan: RobustPlanResponse = {
+  feasible: true,
+  status: 'ROBUST',
+  message: '稳健刻度',
+  n: 7,
+  dose: '70',
+  finalVolume: '570',
+  finalSugarLow: '8.0701754385964912280701754385964912280701754385965',
+  finalSugarHigh: '8.0701754385964912280701754385964912280701754385965',
+  worstDeviation: '0.070175438596491228070175438596491228070175438596491',
+  minToleranceGap: null,
+  inputs: { V: '500', C: '5', T: '8', S: '30', K: '600', Q: '10', U: '0', E: '0.5' },
+};
+
+// E=0：最优 n=6 最坏偏差 0.5357…>0，不可行，缺口等于最坏偏差
+const noRobustPlan: RobustPlanResponse = {
+  feasible: false,
+  status: 'NO_ROBUST',
+  message: '无稳健刻度',
+  n: 6,
+  dose: '60',
+  finalVolume: '560',
+  finalSugarLow: '7.4642857142857142857142857142857142857142857142857',
+  finalSugarHigh: '7.8928571428571428571428571428571428571428571428571',
+  worstDeviation: '0.53571428571428571428571428571428571428571428571429',
+  minToleranceGap: '0.53571428571428571428571428571428571428571428571429',
+  inputs: { V: '500', C: '5', T: '8', S: '30', K: '560', Q: '10', U: '2', E: '0' },
+};
+
+const noCapacityPlan: RobustPlanResponse = {
+  feasible: false,
+  status: 'NO_CAPACITY',
+  message: '容量放不下一个刻度',
+  n: null,
+  dose: null,
+  finalVolume: null,
+  finalSugarHigh: null,
+  finalSugarLow: null,
+  worstDeviation: null,
+  minToleranceGap: null,
+  inputs: { V: '500', C: '5', T: '8', S: '30', K: '505', Q: '10', U: '1', E: '0.1' },
+};
+
+describe('buildRobustPlanView 稳健刻度方案', () => {
+  it('稳健刻度：展示剂量、终态体积、终态糖度区间与最坏偏差，不展示缺口', () => {
+    const view = buildRobustPlanView(robustPlan);
+    expect(view.status).toBe('ROBUST');
+    expect(view.statusText).toBe('稳健刻度');
+    const rows = Object.fromEntries(view.rows.map((r) => [r.testId, r.value]));
+    expect(rows['robust-dose']).toBe('70');
+    expect(rows['robust-final-volume']).toBe('570');
+    expect(rows['robust-sugar-range']).toBe('8.0702 ~ 8.0702');
+    expect(rows['robust-worst']).toBe('0.0702');
+    expect(rows['robust-gap']).toBeUndefined();
+  });
+
+  it('无稳健刻度：保留最优刻度展示并追加最小容差缺口', () => {
+    const view = buildRobustPlanView(noRobustPlan);
+    expect(view.status).toBe('NO_ROBUST');
+    expect(view.statusText).toBe('无稳健刻度');
+    const rows = Object.fromEntries(view.rows.map((r) => [r.testId, r.value]));
+    expect(rows['robust-dose']).toBe('60');
+    expect(rows['robust-sugar-range']).toBe('7.4643 ~ 7.8929');
+    expect(rows['robust-worst']).toBe('0.5357');
+    expect(rows['robust-gap']).toBe('0.5357');
+  });
+
+  it('容量放不下一个刻度：只展示结论，无任何数据行', () => {
+    const view = buildRobustPlanView(noCapacityPlan);
+    expect(view.status).toBe('NO_CAPACITY');
+    expect(view.statusText).toBe('容量放不下一个刻度');
+    expect(view.rows).toEqual([]);
+  });
+});
+
+describe('splitRobustErrors 稳健刻度非法输入', () => {
+  it('Q/U/E 定位到刻度表单，五项回到主表单，其余进全局消息', () => {
+    const { fieldErrors, robustFieldErrors, globalMessages } = splitRobustErrors([
+      { field: 'Q', message: '单刻度量 Q 必须大于 0' },
+      { field: 'U', message: '糖度区间下界 S-U 必须大于目标糖度 T' },
+      { field: 'E', message: '终态容差 E 不能为负数' },
+      { field: 'T', message: '目标糖度 T 必须大于当前糖度 C' },
+      { field: null, message: '请求体不是有效的 JSON' },
+    ]);
+    expect(robustFieldErrors.Q).toBe('单刻度量 Q 必须大于 0');
+    expect(robustFieldErrors.U).toBe('糖度区间下界 S-U 必须大于目标糖度 T');
+    expect(robustFieldErrors.E).toBe('终态容差 E 不能为负数');
+    expect(fieldErrors.T).toBe('目标糖度 T 必须大于当前糖度 C');
+    expect(globalMessages).toEqual(['请求体不是有效的 JSON']);
+  });
+
+  it('无 Q/U/E 错误时 robustFieldErrors 为空', () => {
+    const { robustFieldErrors } = splitRobustErrors([
+      { field: 'V', message: '当前体积 V 必须大于 0' },
+    ]);
+    expect(robustFieldErrors).toEqual({});
   });
 });
