@@ -2,9 +2,17 @@
  *
  * 腾容方案状态独立于判定结论：非法 D 或请求失败只清除旧方案，
  * 绝不清除或覆盖原判定结论，腾容结果也不会被误作原始判定。
+ *
+ * 稳健刻度方案同理：只挂在「允许补加」结论之下，非法 Q/U/E 或请求失败
+ * 只清除旧稳健方案并保留原允许结论；重新判定（无论成败）一律作废旧方案。
  */
 
-import type { DrainPlanResponse, FieldKey, JudgeResponse } from './api';
+import type {
+  DrainPlanResponse,
+  FieldKey,
+  JudgeResponse,
+  RobustPlanResponse,
+} from './api';
 
 export interface ConsoleState {
   result: JudgeResponse | null;
@@ -18,6 +26,13 @@ export interface ConsoleState {
   /** 腾容请求级错误（服务异常等） */
   drainGlobalError: string | null;
   drainSubmitting: boolean;
+  /** 稳健刻度方案（仅挂在允许补加结论下） */
+  robustPlan: RobustPlanResponse | null;
+  /** 稳健参数 Q/U/E 的字段级错误 */
+  robustFieldErrors: Partial<Record<string, string>>;
+  /** 稳健方案请求级错误（服务异常等） */
+  robustGlobalError: string | null;
+  robustSubmitting: boolean;
 }
 
 export const initialState: ConsoleState = {
@@ -29,14 +44,22 @@ export const initialState: ConsoleState = {
   drainFieldError: null,
   drainGlobalError: null,
   drainSubmitting: false,
+  robustPlan: null,
+  robustFieldErrors: {},
+  robustGlobalError: null,
+  robustSubmitting: false,
 };
 
-/** 主判定重新得出结论（无论成败）时，腾容方案一律作废。 */
-const clearedDrain = {
+/** 主判定重新得出结论（无论成败）时，挂在结论下的腾容/稳健方案一律作废。 */
+const clearedPlans = {
   drainPlan: null,
   drainFieldError: null,
   drainGlobalError: null,
   drainSubmitting: false,
+  robustPlan: null,
+  robustFieldErrors: {},
+  robustGlobalError: null,
+  robustSubmitting: false,
 } as const;
 
 export type ConsoleAction =
@@ -52,7 +75,16 @@ export type ConsoleAction =
       drainFieldError: string | null;
       message: string;
     }
-  | { type: 'drain/failed'; message: string };
+  | { type: 'drain/failed'; message: string }
+  | { type: 'robust/start' }
+  | { type: 'robust/success'; plan: RobustPlanResponse }
+  | {
+      type: 'robust/rejected';
+      fieldErrors: Partial<Record<FieldKey, string>>;
+      robustFieldErrors: Partial<Record<string, string>>;
+      message: string;
+    }
+  | { type: 'robust/failed'; message: string };
 
 export function consoleReducer(state: ConsoleState, action: ConsoleAction): ConsoleState {
   switch (action.type) {
@@ -61,7 +93,7 @@ export function consoleReducer(state: ConsoleState, action: ConsoleAction): Cons
     case 'submit/success':
       return {
         ...state,
-        ...clearedDrain,
+        ...clearedPlans,
         submitting: false,
         result: action.result,
         fieldErrors: {},
@@ -71,7 +103,7 @@ export function consoleReducer(state: ConsoleState, action: ConsoleAction): Cons
       // 整单拒绝：定位字段并清除旧结论
       return {
         ...state,
-        ...clearedDrain,
+        ...clearedPlans,
         submitting: false,
         result: null,
         fieldErrors: action.fieldErrors,
@@ -81,7 +113,7 @@ export function consoleReducer(state: ConsoleState, action: ConsoleAction): Cons
       // 请求失败同样清除旧结论，避免展示过期判定
       return {
         ...state,
-        ...clearedDrain,
+        ...clearedPlans,
         submitting: false,
         result: null,
         globalError: action.message,
@@ -114,6 +146,35 @@ export function consoleReducer(state: ConsoleState, action: ConsoleAction): Cons
         drainSubmitting: false,
         drainPlan: null,
         drainGlobalError: action.message,
+      };
+    case 'robust/start':
+      return { ...state, robustSubmitting: true, robustGlobalError: null };
+    case 'robust/success':
+      // 稳健方案只挂在允许结论之下，绝不动原判定
+      return {
+        ...state,
+        robustSubmitting: false,
+        robustPlan: action.plan,
+        robustFieldErrors: {},
+        robustGlobalError: null,
+      };
+    case 'robust/rejected':
+      // 非法 Q/U/E：定位字段、清除旧方案，但保留原允许结论
+      return {
+        ...state,
+        robustSubmitting: false,
+        robustPlan: null,
+        fieldErrors: { ...state.fieldErrors, ...action.fieldErrors },
+        robustFieldErrors: action.robustFieldErrors,
+        robustGlobalError: action.message,
+      };
+    case 'robust/failed':
+      // 稳健方案请求失败：清除旧方案、保留原判定
+      return {
+        ...state,
+        robustSubmitting: false,
+        robustPlan: null,
+        robustGlobalError: action.message,
       };
     default:
       return state;

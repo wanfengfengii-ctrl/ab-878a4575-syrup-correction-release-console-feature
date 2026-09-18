@@ -66,21 +66,31 @@ describe('ResultPanel 溢罐主线', () => {
 });
 
 describe('ResultPanel 腾容入口承载', () => {
-  it('禁止补加时渲染传入的腾容入口', () => {
+  it('禁止补加时渲染禁止位传入的腾容入口', () => {
     render(
-      <ResultPanel result={forbiddenResponse}>
-        <div data-testid="drain-slot">腾容入口</div>
-      </ResultPanel>,
+      <ResultPanel result={forbiddenResponse} blockedSlot={<div data-testid="drain-slot">腾容入口</div>} />,
     );
     expect(screen.getByTestId('drain-slot')).toBeInTheDocument();
   });
 
-  it('允许补加时不渲染腾容入口', () => {
+  it('允许补加时不渲染禁止位的腾容入口', () => {
     render(
-      <ResultPanel result={allowedResponse}>
-        <div data-testid="drain-slot">腾容入口</div>
-      </ResultPanel>,
+      <ResultPanel result={allowedResponse} blockedSlot={<div data-testid="drain-slot">腾容入口</div>} />,
     );
     expect(screen.queryByTestId('drain-slot')).toBeNull();
+  });
+
+  it('允许补加时渲染允许位传入的稳健方案入口', () => {
+    render(
+      <ResultPanel result={allowedResponse} allowedSlot={<div data-testid="robust-slot">稳健入口</div>} />,
+    );
+    expect(screen.getByTestId('robust-slot')).toBeInTheDocument();
+  });
+
+  it('禁止补加时不渲染允许位的稳健方案入口', () => {
+    render(
+      <ResultPanel result={forbiddenResponse} allowedSlot={<div data-testid="robust-slot">稳健入口</div>} />,
+    );
+    expect(screen.queryByTestId('robust-slot')).toBeNull();
   });
 });

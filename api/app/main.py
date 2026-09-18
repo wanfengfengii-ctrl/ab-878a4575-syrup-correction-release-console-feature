@@ -6,8 +6,16 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from .schemas import ALL_FIELD_NAMES, DrainPlanRequest, DrainPlanResponse, JudgeRequest, JudgeResponse
-from .service import JudgeRejected, drain_plan, judge
+from .schemas import (
+    ALL_FIELD_NAMES,
+    DrainPlanRequest,
+    DrainPlanResponse,
+    JudgeRequest,
+    JudgeResponse,
+    RobustPlanRequest,
+    RobustPlanResponse,
+)
+from .service import JudgeRejected, drain_plan, judge, robust_plan
 
 app = FastAPI(title="单罐补加判定台", version="1.0.0")
 
@@ -66,3 +74,8 @@ def judge_endpoint(payload: JudgeRequest) -> dict:
 @app.post("/api/drain-plan", response_model=DrainPlanResponse)
 def drain_plan_endpoint(payload: DrainPlanRequest) -> dict:
     return drain_plan(payload)
+
+
+@app.post("/api/robust-plan", response_model=RobustPlanResponse)
+def robust_plan_endpoint(payload: RobustPlanRequest) -> dict:
+    return robust_plan(payload)

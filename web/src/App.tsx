@@ -2,10 +2,17 @@ import { useReducer, useState } from 'react';
 import type { FormEvent } from 'react';
 import { DrainPlanPanel } from './components/DrainPlanPanel';
 import { ResultPanel } from './components/ResultPanel';
-import { FIELD_KEYS, judgeDose, JudgeRequestError, requestDrainPlan } from './lib/api';
-import type { FieldKey } from './lib/api';
+import { RobustPlanPanel } from './components/RobustPlanPanel';
+import {
+  FIELD_KEYS,
+  judgeDose,
+  JudgeRequestError,
+  requestDrainPlan,
+  requestRobustPlan,
+} from './lib/api';
+import type { FieldKey, RobustFieldKey } from './lib/api';
 import { consoleReducer, initialState } from './lib/state';
-import { mapFieldErrors, splitDrainErrors } from './lib/view';
+import { mapFieldErrors, splitDrainErrors, splitRobustErrors } from './lib/view';
 
 const FIELD_META: Record<FieldKey, { label: string; unit: string }> = {
   V: { label: '当前体积 V', unit: 'mL' },
@@ -24,12 +31,18 @@ export default function App() {
     K: '',
   });
   const [drainLimit, setDrainLimit] = useState('');
+  const [robustParams, setRobustParams] = useState<Record<RobustFieldKey, string>>({
+    Q: '',
+    U: '',
+    E: '',
+  });
   const [state, dispatch] = useReducer(consoleReducer, initialState);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    // 主判定重新发起：旧腾容方案与 D 一并作废
+    // 主判定重新发起：旧方案（腾容/稳健）与方案参数一并作废
     setDrainLimit('');
+    setRobustParams({ Q: '', U: '', E: '' });
     dispatch({ type: 'submit/start' });
     try {
       const result = await judgeDose(values);
@@ -70,6 +83,39 @@ export default function App() {
         });
       }
     }
+  }
+
+  async function onRobustSubmit() {
+    const result = state.result;
+    if (!result || result.verdict !== 'ALLOWED') return;
+    dispatch({ type: 'robust/start' });
+    try {
+      // 复用允许补加判定的五项输入，只新增单刻度量 Q、糖度波动 U、终态容差 E
+      const plan = await requestRobustPlan(result.inputs, robustParams);
+      dispatch({ type: 'robust/success', plan });
+    } catch (error) {
+      if (error instanceof JudgeRequestError) {
+        const { fieldErrors, robustFieldErrors, globalMessages } = splitRobustErrors(
+          error.fieldErrors,
+        );
+        const message = [error.message, ...globalMessages].join('；');
+        dispatch({
+          type: 'robust/rejected',
+          fieldErrors,
+          robustFieldErrors,
+          message,
+        });
+      } else {
+        dispatch({
+          type: 'robust/failed',
+          message: error instanceof Error ? error.message : '未知错误',
+        });
+      }
+    }
+  }
+
+  function onRobustParamChange(field: RobustFieldKey, value: string) {
+    setRobustParams((prev) => ({ ...prev, [field]: value }));
   }
 
   return (
@@ -115,17 +161,31 @@ export default function App() {
         </div>
       )}
       {state.result && (
-        <ResultPanel result={state.result}>
-          <DrainPlanPanel
-            plan={state.drainPlan}
-            value={drainLimit}
-            onValueChange={setDrainLimit}
-            fieldError={state.drainFieldError}
-            globalError={state.drainGlobalError}
-            submitting={state.drainSubmitting}
-            onSubmit={onDrainSubmit}
-          />
-        </ResultPanel>
+        <ResultPanel
+          result={state.result}
+          allowedSlot={
+            <RobustPlanPanel
+              plan={state.robustPlan}
+              values={robustParams}
+              onValueChange={onRobustParamChange}
+              fieldErrors={state.robustFieldErrors}
+              globalError={state.robustGlobalError}
+              submitting={state.robustSubmitting}
+              onSubmit={onRobustSubmit}
+            />
+          }
+          blockedSlot={
+            <DrainPlanPanel
+              plan={state.drainPlan}
+              value={drainLimit}
+              onValueChange={setDrainLimit}
+              fieldError={state.drainFieldError}
+              globalError={state.drainGlobalError}
+              submitting={state.drainSubmitting}
+              onSubmit={onDrainSubmit}
+            />
+          }
+        />
       )}
     </main>
   );

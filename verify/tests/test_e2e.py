@@ -166,3 +166,120 @@ def test_allowed_verdict_has_no_drain_entry(page: Page, base_url: str):
     expect(page.get_by_test_id("verdict")).to_have_text("允许补加")
     expect(page.get_by_test_id("drain-entry")).to_have_count(0)
     expect(page.get_by_test_id("drain-panel")).to_have_count(0)
+
+
+# ---------- 稳健刻度方案主线 ----------
+
+
+def submit_robust(page: Page) -> None:
+    page.get_by_test_id("robust-entry").click()
+
+
+def test_robust_plan_shows_dose_range_and_worst_deviation(page: Page, base_url: str):
+    # V=500 C=5 T=8 S=30 K=600，Q=10 U=1 E=0.5：最优 n=7，剂量 70
+    page.goto(base_url)
+    fill_form(page, ALLOW_VALUES)
+    submit(page)
+    expect(page.get_by_test_id("verdict")).to_have_text("允许补加")
+
+    page.locator("#field-Q").fill("10")
+    page.locator("#field-U").fill("1")
+    page.locator("#field-E").fill("0.5")
+    submit_robust(page)
+
+    expect(page.get_by_test_id("robust-status")).to_have_text("稳健刻度")
+    expect(page.get_by_test_id("robust-dose")).to_have_text("70")
+    expect(page.get_by_test_id("robust-range")).to_have_text("7.9474 ~ 8.193")
+    expect(page.get_by_test_id("robust-worst")).to_have_text("0.193")
+    expect(page.get_by_test_id("robust-gap")).to_have_count(0)
+    # 方案挂在允许结论之下，原判定保持不变
+    expect(page.get_by_test_id("verdict")).to_have_text("允许补加")
+
+
+def test_no_robust_mark_shows_tolerance_gap_only(page: Page, base_url: str):
+    page.goto(base_url)
+    fill_form(page, ALLOW_VALUES)
+    submit(page)
+
+    page.locator("#field-Q").fill("10")
+    page.locator("#field-U").fill("2")
+    page.locator("#field-E").fill("0.01")
+    submit_robust(page)
+
+    expect(page.get_by_test_id("robust-status")).to_have_text("无稳健刻度")
+    expect(page.get_by_test_id("robust-gap")).to_have_text("0.3058")
+    # 不呈现剂量、区间与最坏偏差
+    expect(page.get_by_test_id("robust-dose")).to_have_count(0)
+    expect(page.get_by_test_id("robust-range")).to_have_count(0)
+    expect(page.get_by_test_id("robust-worst")).to_have_count(0)
+
+
+def test_capacity_cannot_fit_one_mark_shows_no_feasible_mark(page: Page, base_url: str):
+    # K=600 判定允许（终态 568.18），但 Q=101 使 V+Q=601>600，放不下一个刻度
+    page.goto(base_url)
+    fill_form(page, ALLOW_VALUES)
+    submit(page)
+    expect(page.get_by_test_id("verdict")).to_have_text("允许补加")
+
+    page.locator("#field-Q").fill("101")
+    page.locator("#field-U").fill("1")
+    page.locator("#field-E").fill("0.5")
+    submit_robust(page)
+
+    expect(page.get_by_test_id("robust-status")).to_have_text("无稳健刻度")
+    expect(page.get_by_test_id("robust-gap")).to_have_text("无可行刻度")
+
+
+def test_invalid_robust_params_clear_old_plan_but_keep_verdict(page: Page, base_url: str):
+    page.goto(base_url)
+    fill_form(page, ALLOW_VALUES)
+    submit(page)
+
+    # 先生成一个稳健方案
+    page.locator("#field-Q").fill("10")
+    page.locator("#field-U").fill("1")
+    page.locator("#field-E").fill("0.5")
+    submit_robust(page)
+    expect(page.get_by_test_id("robust-status")).to_have_text("稳健刻度")
+
+    # 再填非法 Q：定位字段、清除旧方案，但保留原允许结论
+    page.locator("#field-Q").fill("-1")
+    submit_robust(page)
+
+    expect(page.get_by_test_id("error-Q")).to_have_text("单刻度量 Q 必须大于 0")
+    expect(page.get_by_test_id("robust-result")).to_have_count(0)
+    expect(page.get_by_test_id("verdict")).to_have_text("允许补加")
+
+
+def test_robust_entry_only_under_allowed_verdict(page: Page, base_url: str):
+    # 允许补加：有稳健入口，无腾容入口
+    page.goto(base_url)
+    fill_form(page, ALLOW_VALUES)
+    submit(page)
+    expect(page.get_by_test_id("robust-panel")).to_have_count(1)
+    expect(page.get_by_test_id("drain-panel")).to_have_count(0)
+
+    # 改判为禁止补加：稳健入口消失，腾容入口出现
+    page.locator("#field-K").fill("550")
+    submit(page)
+    expect(page.get_by_test_id("verdict")).to_have_text("禁止补加")
+    expect(page.get_by_test_id("robust-panel")).to_have_count(0)
+    expect(page.get_by_test_id("drain-panel")).to_have_count(1)
+
+
+def test_rejudging_clears_robust_plan(page: Page, base_url: str):
+    page.goto(base_url)
+    fill_form(page, ALLOW_VALUES)
+    submit(page)
+    page.locator("#field-Q").fill("10")
+    page.locator("#field-U").fill("1")
+    page.locator("#field-E").fill("0.5")
+    submit_robust(page)
+    expect(page.get_by_test_id("robust-status")).to_have_text("稳健刻度")
+
+    # 重新判定（仍允许）：旧稳健方案与 Q/U/E 输入一并清除
+    submit(page)
+    expect(page.get_by_test_id("robust-result")).to_have_count(0)
+    expect(page.locator("#field-Q")).to_have_value("")
+    expect(page.locator("#field-U")).to_have_value("")
+    expect(page.locator("#field-E")).to_have_value("")

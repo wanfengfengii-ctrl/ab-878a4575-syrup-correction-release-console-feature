@@ -5,8 +5,9 @@ import type {
   FieldErrorItem,
   FieldKey,
   JudgeResponse,
+  RobustPlanResponse,
 } from './api';
-import { DRAIN_FIELD, FIELD_KEYS } from './api';
+import { DRAIN_FIELD, FIELD_KEYS, ROBUST_FIELDS } from './api';
 import { formatDecimal } from './format';
 
 export interface ResultRow {
@@ -82,6 +83,46 @@ export function buildDrainPlanView(res: DrainPlanResponse): DrainPlanView {
   return { status: res.status, statusText: res.message, rows };
 }
 
+export interface RobustPlanView {
+  status: 'ROBUST' | 'NO_ROBUST_MARK';
+  statusText: string;
+  rows: ResultRow[];
+}
+
+export function buildRobustPlanView(res: RobustPlanResponse): RobustPlanView {
+  const rows: ResultRow[] = [];
+  if (res.status === 'ROBUST') {
+    // 稳健：剂量 nQ、终态糖度区间 [F_-, F_+] 与最坏偏差
+    rows.push(
+      {
+        label: `剂量 nQ（${res.n ?? ''} 个刻度，毫升）`,
+        value: formatDecimal(res.dose ?? '0'),
+        testId: 'robust-dose',
+      },
+      {
+        label: '终态糖度区间（%）',
+        value: `${formatDecimal(res.finalConcentrationLow ?? '0')} ~ ${formatDecimal(
+          res.finalConcentrationHigh ?? '0',
+        )}`,
+        testId: 'robust-range',
+      },
+      {
+        label: '最坏偏差（%）',
+        value: formatDecimal(res.worstDeviation ?? '0'),
+        testId: 'robust-worst',
+      },
+    );
+  } else {
+    // 无稳健刻度：只显示最小容差缺口（容量放不下一个刻度时缺口无从计算）
+    rows.push({
+      label: '最小容差缺口（%）',
+      value: res.toleranceGap === null ? '无可行刻度' : formatDecimal(res.toleranceGap),
+      testId: 'robust-gap',
+    });
+  }
+  return { status: res.status, statusText: res.message, rows };
+}
+
 /** 把 422 错误列表拆分为字段级错误与全局消息。 */
 export function mapFieldErrors(items: FieldErrorItem[]): {
   fieldErrors: Partial<Record<FieldKey, string>>;
@@ -118,4 +159,25 @@ export function splitDrainErrors(items: FieldErrorItem[]): {
     }
   }
   return { fieldErrors, drainFieldError, globalMessages };
+}
+
+/** 稳健方案请求的 422 错误：Q/U/E 定位到方案参数，五项回到主表单，其余进全局消息。 */
+export function splitRobustErrors(items: FieldErrorItem[]): {
+  fieldErrors: Partial<Record<FieldKey, string>>;
+  robustFieldErrors: Partial<Record<string, string>>;
+  globalMessages: string[];
+} {
+  const fieldErrors: Partial<Record<FieldKey, string>> = {};
+  const robustFieldErrors: Partial<Record<string, string>> = {};
+  const globalMessages: string[] = [];
+  for (const item of items) {
+    if (item.field && (ROBUST_FIELDS as readonly string[]).includes(item.field)) {
+      robustFieldErrors[item.field] = item.message;
+    } else if (item.field && (FIELD_KEYS as readonly string[]).includes(item.field)) {
+      fieldErrors[item.field as FieldKey] = item.message;
+    } else {
+      globalMessages.push(item.message);
+    }
+  }
+  return { fieldErrors, robustFieldErrors, globalMessages };
 }

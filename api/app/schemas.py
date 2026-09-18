@@ -13,8 +13,10 @@ from pydantic import BaseModel, ConfigDict, field_validator
 
 FIELD_NAMES = ("V", "C", "T", "S", "K")
 DRAIN_FIELD = "D"
-# 422 响应中可定位的全部字段（判定五项 + 腾容排出上限）
-ALL_FIELD_NAMES = FIELD_NAMES + (DRAIN_FIELD,)
+# 稳健刻度方案的三项参数：单刻度量 Q、糖度波动 U、终态容差 E
+ROBUST_FIELDS = ("Q", "U", "E")
+# 422 响应中可定位的全部字段（判定五项 + 腾容排出上限 + 稳健方案三项）
+ALL_FIELD_NAMES = FIELD_NAMES + (DRAIN_FIELD,) + ROBUST_FIELDS
 MAX_DECIMAL_PLACES = 4
 
 
@@ -86,6 +88,28 @@ class DrainPlanRequest(JudgeRequest):
         return _check_decimal_value(value)
 
 
+class RobustPlanRequest(JudgeRequest):
+    """稳健刻度方案请求：判定五项 + 单刻度量 Q(mL)、糖度波动 U(%)、终态容差 E(%)。
+
+    现场泵按固定刻度投料，剂量为 nQ（n 为正整数）；糖浆实际糖度落在
+    [S-U, S+U] 区间，要求两端点终态糖度相对目标 T 的最坏偏差不超过 E。
+    """
+
+    Q: Decimal
+    U: Decimal
+    E: Decimal
+
+    @field_validator(*ROBUST_FIELDS, mode="before")
+    @classmethod
+    def _normalize_robust(cls, value: Any) -> Any:
+        return _normalize_value(value)
+
+    @field_validator(*ROBUST_FIELDS)
+    @classmethod
+    def _check_decimal_robust(cls, value: Decimal) -> Decimal:
+        return _check_decimal_value(value)
+
+
 class JudgeResponse(BaseModel):
     """判定结果。数值字段为完整精度十进制字符串，展示格式化由前端负责。"""
 
@@ -109,3 +133,20 @@ class DrainPlanResponse(BaseModel):
     finalVolume: str | None  # 终态体积 (mL)，可执行时给出，恰好不超过容量
     shortfall: str | None  # 仍缺少的排出量 d-D (mL)，超出排出上限时给出
     inputs: dict[str, str]  # 规范化后的输入回显（含 D，去除无意义尾零）
+
+
+class RobustPlanResponse(BaseModel):
+    """稳健刻度方案结果。数值字段为完整精度十进制字符串，展示格式化由前端负责。"""
+
+    status: str  # ROBUST / NO_ROBUST_MARK
+    message: str  # 稳健刻度 / 无稳健刻度
+    # 最优刻度数 n 与剂量 nQ：找到稳健刻度时给出
+    n: int | None
+    dose: str | None  # 剂量 nQ (mL)
+    # 两端点终态糖度 (%)：找到时给出
+    finalConcentrationLow: str | None  # 糖浆取 S-U 时的终态糖度
+    finalConcentrationHigh: str | None  # 糖浆取 S+U 时的终态糖度
+    worstDeviation: str | None  # 最坏偏差 max(|F_-T|, |F_+-T|) (%)，找到时给出
+    toleranceGap: str | None  # 最小容差缺口 最优偏差-E (%)，无稳健刻度时给出
+    inputs: dict[str, str]  # 规范化后的输入回显（含 Q、U、E，去除无意义尾零）
+

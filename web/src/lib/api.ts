@@ -7,6 +7,10 @@ export type FieldKey = (typeof FIELD_KEYS)[number];
 export const DRAIN_FIELD = 'D' as const;
 export type DrainFieldKey = typeof DRAIN_FIELD;
 
+/** 稳健刻度方案的三项参数字段名 */
+export const ROBUST_FIELDS = ['Q', 'U', 'E'] as const;
+export type RobustFieldKey = (typeof ROBUST_FIELDS)[number];
+
 export interface JudgeResponse {
   verdict: 'ALLOWED' | 'FORBIDDEN';
   message: string;
@@ -41,8 +45,29 @@ export interface DrainPlanResponse {
   inputs: Record<FieldKey | DrainFieldKey, string>;
 }
 
+export type RobustStatus = 'ROBUST' | 'NO_ROBUST_MARK';
+
+export interface RobustPlanResponse {
+  status: RobustStatus;
+  message: string;
+  /** 最优刻度数 n（正整数），无稳健刻度时为 null */
+  n: number | null;
+  /** 剂量 nQ（完整精度，mL），稳健时给出 */
+  dose: string | null;
+  /** 糖浆取 S-U 时的终态糖度（完整精度，%），稳健时给出 */
+  finalConcentrationLow: string | null;
+  /** 糖浆取 S+U 时的终态糖度（完整精度，%），稳健时给出 */
+  finalConcentrationHigh: string | null;
+  /** 最坏偏差（完整精度，%），稳健时给出 */
+  worstDeviation: string | null;
+  /** 最小容差缺口 最优偏差-E（完整精度，%），无稳健刻度时给出（无可行刻度时为 null） */
+  toleranceGap: string | null;
+  /** 规范化后的输入回显（含 Q、U、E） */
+  inputs: Record<FieldKey | RobustFieldKey, string>;
+}
+
 export interface FieldErrorItem {
-  field: FieldKey | DrainFieldKey | null;
+  field: FieldKey | DrainFieldKey | RobustFieldKey | null;
   message: string;
 }
 
@@ -91,4 +116,12 @@ export async function requestDrainPlan(
   drainLimit: string,
 ): Promise<DrainPlanResponse> {
   return postJson<DrainPlanResponse>('/api/drain-plan', { ...inputs, [DRAIN_FIELD]: drainLimit });
+}
+
+/** 生成稳健刻度方案：复用允许补加判定的五项输入 + Q（单刻度量）、U（糖度波动）、E（终态容差）。 */
+export async function requestRobustPlan(
+  inputs: Record<FieldKey, string>,
+  params: Record<RobustFieldKey, string>,
+): Promise<RobustPlanResponse> {
+  return postJson<RobustPlanResponse>('/api/robust-plan', { ...inputs, ...params });
 }

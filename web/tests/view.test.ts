@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { DrainPlanResponse, JudgeResponse } from '../src/lib/api';
-import { buildDrainPlanView, buildResultView, mapFieldErrors, splitDrainErrors } from '../src/lib/view';
+import type { DrainPlanResponse, JudgeResponse, RobustPlanResponse } from '../src/lib/api';
+import { buildDrainPlanView, buildResultView, buildRobustPlanView, mapFieldErrors, splitDrainErrors, splitRobustErrors } from '../src/lib/view';
 
 // 以下响应取自真实 API 计算结果（decimal，50 位有效数字）
 const allowedResponse: JudgeResponse = {
@@ -149,5 +149,84 @@ describe('splitDrainErrors 腾容非法输入', () => {
       { field: 'V', message: '当前体积 V 必须大于 0' },
     ]);
     expect(drainFieldError).toBeNull();
+  });
+});
+
+// 真实 API 计算值：V=500 C=5 T=8 S=30 K=600，Q=10 U=1，最优 n=7（剂量 70）：
+// F_- = 4530/570 = 7.9474，F_+ = 4670/570 = 8.1930，最坏偏差 0.1930
+const robustResponse: RobustPlanResponse = {
+  status: 'ROBUST',
+  message: '稳健刻度',
+  n: 7,
+  dose: '70',
+  finalConcentrationLow: '7.9473684210526315789473684210526315789473684210526',
+  finalConcentrationHigh: '8.1929824561403508771929824561403508771929824561404',
+  worstDeviation: '0.1929824561403508771929824561403508771929824561404',
+  toleranceGap: null,
+  inputs: { V: '500', C: '5', T: '8', S: '30', K: '600', Q: '10', U: '1', E: '0.5' },
+};
+
+const noRobustResponse: RobustPlanResponse = {
+  status: 'NO_ROBUST_MARK',
+  message: '无稳健刻度',
+  n: null,
+  dose: null,
+  finalConcentrationLow: null,
+  finalConcentrationHigh: null,
+  worstDeviation: null,
+  toleranceGap: '0.3057894736842105263157894736842105263157894736842',
+  inputs: { V: '500', C: '5', T: '8', S: '30', K: '600', Q: '10', U: '2', E: '0.01' },
+};
+
+const noFeasibleResponse: RobustPlanResponse = {
+  ...noRobustResponse,
+  toleranceGap: null,
+  inputs: { V: '500', C: '5', T: '8', S: '30', K: '505', Q: '10', U: '1', E: '0.5' },
+};
+
+describe('buildRobustPlanView 稳健刻度方案', () => {
+  it('稳健：展示剂量 nQ、终态糖度区间与最坏偏差', () => {
+    const view = buildRobustPlanView(robustResponse);
+    expect(view.status).toBe('ROBUST');
+    expect(view.statusText).toBe('稳健刻度');
+    const rows = Object.fromEntries(view.rows.map((r) => [r.testId, r.value]));
+    expect(rows['robust-dose']).toBe('70');
+    expect(rows['robust-range']).toBe('7.9474 ~ 8.193');
+    expect(rows['robust-worst']).toBe('0.193');
+    expect(rows['robust-gap']).toBeUndefined();
+  });
+
+  it('无稳健刻度：只展示最小容差缺口，不呈现剂量与区间', () => {
+    const view = buildRobustPlanView(noRobustResponse);
+    expect(view.status).toBe('NO_ROBUST_MARK');
+    expect(view.statusText).toBe('无稳健刻度');
+    const rows = Object.fromEntries(view.rows.map((r) => [r.testId, r.value]));
+    expect(rows['robust-gap']).toBe('0.3058');
+    expect(rows['robust-dose']).toBeUndefined();
+    expect(rows['robust-range']).toBeUndefined();
+    expect(rows['robust-worst']).toBeUndefined();
+  });
+
+  it('容量放不下一个刻度：缺口显示无可行刻度', () => {
+    const view = buildRobustPlanView(noFeasibleResponse);
+    const rows = Object.fromEntries(view.rows.map((r) => [r.testId, r.value]));
+    expect(rows['robust-gap']).toBe('无可行刻度');
+  });
+});
+
+describe('splitRobustErrors 稳健方案非法输入', () => {
+  it('Q/U/E 定位到方案参数，五项回到主表单，其余进全局消息', () => {
+    const { fieldErrors, robustFieldErrors, globalMessages } = splitRobustErrors([
+      { field: 'Q', message: '单刻度量 Q 必须大于 0' },
+      { field: 'U', message: '糖度波动 U 不能为负数' },
+      { field: 'E', message: '终态容差 E 不能为负数' },
+      { field: 'T', message: '目标糖度 T 必须大于当前糖度 C' },
+      { field: null, message: '请求体不是有效的 JSON' },
+    ]);
+    expect(robustFieldErrors.Q).toBe('单刻度量 Q 必须大于 0');
+    expect(robustFieldErrors.U).toBe('糖度波动 U 不能为负数');
+    expect(robustFieldErrors.E).toBe('终态容差 E 不能为负数');
+    expect(fieldErrors.T).toBe('目标糖度 T 必须大于当前糖度 C');
+    expect(globalMessages).toEqual(['请求体不是有效的 JSON']);
   });
 });

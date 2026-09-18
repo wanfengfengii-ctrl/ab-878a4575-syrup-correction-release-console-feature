@@ -42,6 +42,32 @@ React + TypeScript + Vite 前端与 Python 3.12 + FastAPI + Pydantic 后端真�
 - 「允许补加」结论下不出现腾容入口；若直接对允许补加的输入请求腾容
   （`d ≤ 0`，含终态恰等于容量的边界），HTTP 422 整单拒绝，不生成方案
 
+## 稳健刻度方案
+
+判定为「允许补加」时，若现场泵按**固定刻度**投料且糖浆糖度存在波动，操作员可在
+该结论下发起**生成稳健刻度方案**，填写单刻度量 `Q`、糖度波动 `U`、终态容差 `E`；
+系统复用原五项输入在固定刻度中择优，**不改写原判定**。
+
+- 剂量以正整数刻度数 `n` 表示为 `nQ`，仅受理容量内刻度 `V+nQ ≤ K`（等号允许）
+- 糖浆实际糖度落在区间 `[S-U, S+U]`，对两端点分别按质量守恒计算终态糖度：
+
+  ```
+  F_s(n) = (V·C + nQ·s)/(V + nQ)，s ∈ {S-U, S+U}
+  ```
+
+- 在容量内刻度中选择**最坏端点偏差** `max(T-F_(S-U), F_(S+U)-T)` 最小的 `n`，
+  同值取较小 `n`；最优偏差 `≤ E` 为稳健，否则为无稳健刻度
+- 算法**不逐刻度扫描**：`F_s` 关于剂量单调，两端点各有唯一命中 `T` 的实数剂量
+  `x_s = V×(T-C)/(s-T)`，两偏差分支在 `x₀ = V×(T-C)/(S-T)` 处相交，最坏偏差在
+  `x₀` 左侧递减、右侧递增。用 Decimal 从**容量上界、两端点命中 T、偏差分支相交处**
+  推导实数断点，只评估断点相邻整数与边界刻度，结果与逐刻度穷举定义的全局最优一致
+- 稳健时展示：刻度数与剂量 `nQ`、终态糖度区间 `[F_(S-U), F_(S+U)]`、最坏偏差
+- 无稳健刻度时展示：最小容差缺口 `最优偏差-E`，不呈现剂量与终态区间；
+  容量连一个刻度都放不下（`V+Q>K`）时为业务结果，缺口无从计算
+- `Q≤0`、`U<0`、`S-U≤T`、`S+U>100` 或 `E<0`：HTTP 422 按 `Q`、`U`、`E` 顺序
+  一次性返回全部字段错误（`U` 可同时定位多条关系错误），前端清除旧方案但保留原允许结论
+- `Q`、`U`、`E` 沿用有限数与最多四位小数校验；请求失败也不会把稳健结果误作原始判定
+
 ## 目录结构
 
 ```
@@ -98,8 +124,8 @@ npm run dev        # http://localhost:5173
 ## 测试
 
 ```bash
-cd api && python -m pytest tests/ -v     # 后端：46 例
-cd web && npm test                       # 前端：36 例
+cd api && python -m pytest tests/ -v     # 后端：75 例
+cd web && npm test                       # 前端：54 例
 # 端到端：先启动 api 与 web，再执行 verify 套件
 cd verify && pip install -r requirements.txt
 WEB_BASE_URL=http://localhost:5173 API_BASE_URL=http://localhost:8000 python -m pytest tests -v
@@ -166,3 +192,44 @@ curl -X POST http://localhost:8000/api/drain-plan \
 
 排出上限不足（`D` 改为 `"10"`）：`status` 为 `EXCEEDS_LIMIT`、`message` 为「超出排出上限」，
 `shortfall` 给出仍缺少的排出量 `6`，`dose`、`volumeAfterDrain`、`finalVolume` 均为 `null`。
+
+## 稳健刻度方案 API 示例
+
+```bash
+curl -X POST http://localhost:8000/api/robust-plan \
+  -H 'Content-Type: application/json' \
+  -d '{"V":"500","C":"5","T":"8","S":"30","K":"600","Q":"10","U":"1","E":"0.5"}'
+```
+
+稳健响应（最优为 7 个刻度、剂量 70；数值为完整精度十进制字符串）：
+
+```json
+{
+  "status": "ROBUST",
+  "message": "稳健刻度",
+  "n": 7,
+  "dose": "70",
+  "finalConcentrationLow": "7.9473684210526315789473684210526315789473684210526",
+  "finalConcentrationHigh": "8.1929824561403508771929824561403508771929824561404",
+  "worstDeviation": "0.1929824561403508771929824561403508771929824561404",
+  "toleranceGap": null,
+  "inputs": {"V": "500", "C": "5", "T": "8", "S": "30", "K": "600", "Q": "10", "U": "1", "E": "0.5"}
+}
+```
+
+无稳健刻度（`U` 改为 `"2"`、`E` 改为 `"0.01"`）：`status` 为 `NO_ROBUST_MARK`、
+`message` 为「无稳健刻度」，`toleranceGap` 给出最小容差缺口 `最优偏差-E`，
+`n`、`dose`、两端点终态糖度与 `worstDeviation` 均为 `null`。容量放不下一个刻度
+（`V+Q>K`）时同为业务结果，`toleranceGap` 为 `null`。非法 `Q`/`U`/`E` 返回
+HTTP 422，例如：
+
+```json
+{
+  "detail": "输入校验失败，已整单拒绝",
+  "errors": [
+    {"field": "Q", "message": "单刻度量 Q 必须大于 0"},
+    {"field": "U", "message": "糖度波动 U 不能为负数"},
+    {"field": "E", "message": "终态容差 E 不能为负数"}
+  ]
+}
+```
